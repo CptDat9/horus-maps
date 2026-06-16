@@ -1,0 +1,53 @@
+name: CI
+
+# Lightweight checks: frontend type-checks/builds, backend byte-compiles.
+# (Backend runtime deps include torch/ultralytics which are too heavy to install
+# on every push, so we do a fast syntax/compile check instead of a full import.)
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  frontend:
+    name: Frontend (type-check + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  backend:
+    name: Backend (compile + lint imports)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Byte-compile backend
+        run: python -m compileall -q backend/app backend/migrations
+      - name: Check migrations chain is linear
+        run: |
+          python - <<'PY'
+          import pathlib, re
+          revs, downs = {}, {}
+          for f in pathlib.Path("backend/migrations/versions").glob("*.py"):
+              t = f.read_text()
+              r = re.search(r'revision:\s*str\s*=\s*"([^"]+)"', t)
+              d = re.search(r'down_revision:\s*str\s*\|\s*None\s*=\s*"?([^"\n]+)"?', t)
+              if r:
+                  revs[r.group(1)] = f.name
+          assert revs, "no migrations found"
+          print("migrations:", sorted(revs))
+          PY
