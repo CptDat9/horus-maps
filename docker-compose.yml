@@ -1,0 +1,127 @@
+name: horus-maps
+
+# Full stack (frontend + api + worker + infra):
+#   docker compose up -d --build
+#   App → http://localhost:3000 , API → http://localhost:8000
+#   RabbitMQ UI → http://localhost:15672 (admin/admin)
+#
+# Shared values come from the root .env; the *_HOST overrides below point the
+# containers at the service network (in .env those are localhost for native runs).
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: horus-maps-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: horus_maps
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d horus_maps"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: horus-maps-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: horus-maps-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+
+  titiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    container_name: horus-maps-titiler
+    restart: unless-stopped
+    ports:
+      - "8081:80"   # image's gunicorn listens on 80
+    environment:
+      # GDAL flags to read the PUBLIC Sentinel-2 COG bucket anonymously (not AWS deploy).
+      - AWS_NO_SIGN_REQUEST=YES
+      - AWS_REGION=us-west-2
+      - GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+      - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.TIF,.tiff
+      - GDAL_HTTP_MERGE_CONSECUTIVE_RANGES=YES
+      - GDAL_HTTP_MULTIPLEX=YES
+      - GDAL_HTTP_VERSION=2
+      - GDAL_BAND_BLOCK_CACHE=HASHSET
+      - CPL_TMP=/tmp
+      # ---- COG-from-S3 read speed (the fix for tile ReadTimeouts) ----
+      - GDAL_CACHEMAX=512                       # MB of block cache
+      - VSI_CACHE=TRUE
+      - VSI_CACHE_SIZE=536870912                # 512 MB per-file curl cache
+      - CPL_VSIL_CURL_CACHE_SIZE=536870912
+      - GDAL_INGESTED_BYTES_AT_OPEN=32768       # grab COG header in one range req
+      - GDAL_HTTP_MAX_RETRY=3
+      - GDAL_HTTP_RETRY_DELAY=1
+      - GDAL_HTTP_TIMEOUT=30
+      # Serve tiles concurrently so a viewport burst doesn't queue + time out.
+      - WEB_CONCURRENCY=4
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: horus-maps-api
+    restart: unless-stopped
+    env_file: .env
+    environment: &app_env
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672/
+      TITILER_URL: http://titiler:80              # server-side proxy
+      TITILER_PUBLIC_URL: http://localhost:8081   # browser-facing (compare tiles)
+      DETECTION_OUTPUT_DIR: /app/static/detections # shared with worker (volume)
+    ports:
+      - "8000:8000"
+    volumes:
+      - detection_data:/app/static/detections
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: horus-maps-worker
+    restart: unless-stopped
+    command: python -m app.workers.task_worker
+    env_file: .env
+    environment: *app_env
+    volumes:
+      - detection_data:/app/static/detections
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: horus-maps-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"   # open http://localhost:3000
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  detection_data:

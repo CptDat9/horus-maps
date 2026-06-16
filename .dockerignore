@@ -1,0 +1,17 @@
+# Build context is the repo root — keep everything irrelevant to the backend out.
+.venv/
+.env
+frontend/
+docs/
+.git/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+backend/.venv/
+backend/.env
+tile.png
+# ML: only the weights are needed in the image (COPY ml/yolo11s-obb.pt).
+ml/*.ipynb
+ml/datasets/
+ml/*.geojson
+ml/image.png
