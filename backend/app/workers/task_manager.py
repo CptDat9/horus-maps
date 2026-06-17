@@ -1,6 +1,7 @@
 import uuid
 from typing import Optional, Dict, Any
 
+from app.constants.task_constants import TaskStatus, priority_for
 from app.constants.websocket_constants import task_channel
 from app.utils.logger_utils import get_logger
 from app.databases.postgres import AsyncSessionLocal
@@ -18,23 +19,40 @@ class TaskManager:
         session_id: uuid.UUID,
         task_type: str,
         payload: Dict[str, Any],
+        priority: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Create a DB task record and publish to RabbitMQ."""
+        """Persist a task record then publish it to RabbitMQ.
+
+        Priority defaults to the per-type value (task_constants.priority_for) so
+        quick interactive jobs are delivered ahead of slow detection runs on the
+        shared priority queue. If the broker publish fails the DB row is rolled
+        back, so we never leave a 'pending' task that no worker will ever see.
+        """
+        if priority is None:
+            priority = priority_for(task_type)
+
         async with AsyncSessionLocal() as db:
             task = await task_service.create(
                 db=db,
                 session_id=session_id,
                 task_data=TaskCreate(task_type=task_type, payload=payload),
             )
-
-            await rabbitmq_service.publish_task(
-                task_type=task_type,
-                payload={
-                    "task_id": str(task.id),
-                    "session_id": str(session_id),
-                    **payload,
-                },
-            )
+            try:
+                await rabbitmq_service.publish_task(
+                    task_type=task_type,
+                    payload={
+                        "task_id": str(task.id),
+                        "session_id": str(session_id),
+                        **payload,
+                    },
+                    priority=priority,
+                )
+            except Exception:
+                await task_service.update_status(
+                    db, task.id, TaskStatus.FAILED.value,
+                    error_message="Task queue unavailable",
+                )
+                raise
 
             return {
                 "task_id": str(task.id),
@@ -52,9 +70,6 @@ class TaskManager:
         async with AsyncSessionLocal() as db:
             task = await task_service.update_status(db, task_id, status, result, error_message)
 
-        # Bridge worker → API WebSocket clients via Redis pub/sub. The worker runs
-        # in a separate process from the API, so an in-memory broadcast can't
-        # reach connected sockets — Redis is the cross-process channel.
         try:
             await cache_service.publish(
                 task_channel(task_id),
@@ -74,11 +89,11 @@ class TaskManager:
         from app.workers.task_handlers import task_handlers
 
         try:
-            await self.update_task_status(task_id, "running")
+            await self.update_task_status(task_id, TaskStatus.RUNNING.value)
             await task_handlers.dispatch(task_id, task_type, payload)
         except Exception as e:
             logger.error(f"Task {task_id} failed at manager level: {e}")
-            await self.update_task_status(task_id, "failed", error_message=str(e))
+            await self.update_task_status(task_id, TaskStatus.FAILED.value, error_message=str(e))
 
 
 task_manager = TaskManager()

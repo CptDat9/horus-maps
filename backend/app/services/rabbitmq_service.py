@@ -74,8 +74,6 @@ class RabbitMQService:
             self.channel, self.exchange, _ = await setup_topology(self.connection)
             logger.info("Connected to RabbitMQ")
         except Exception as e:
-            # Don't crash app startup if the broker is down — publish_task will
-            # surface the error to callers, which degrade gracefully.
             self.connection = self.channel = self.exchange = None
             logger.error("RabbitMQ connect failed: %s", e)
 
@@ -90,7 +88,7 @@ class RabbitMQService:
         body = json.dumps({"task_type": task_type, "payload": payload}).encode()
         message = Message(
             body,
-            delivery_mode=2,  # persistent
+            delivery_mode=2,
             priority=max(0, min(priority, rabbitmq_config.MAX_PRIORITY)),
             content_type="application/json",
         )

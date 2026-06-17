@@ -24,20 +24,12 @@ def _default_layers(titiler_url: str) -> list[dict[str, Any]]:
             "id": "sentinel-2-true-color",
             "name": "Sentinel-2 True Color",
             "type": "stac",
-            # Tiles are served by the backend proxy at /api/tiles/{id}/{z}/{x}/{y};
-            # `url` is informational (Titiler base) for clients that need it.
             "url": f"{base}/cog",
             "options": {
                 "collection": "sentinel-2-l2a",
-                "asset": "visual",       # pre-scaled 8-bit RGB COG → no rescale
-                # rio-color: gentle contrast + saturation so true-colour looks
-                # crisp without going garish.
+                "asset": "visual",
                 "color_formula": "gamma RGB 1.05 sigmoidal RGB 4 0.5 saturation 1.15",
                 "minzoom": 8,
-                # Cap at z15: TiTiler then reads a COG OVERVIEW (fast) instead of
-                # full-res (which caused S3 ReadTimeouts), and far fewer tiles per
-                # viewport. The client up-samples z15→deeper with bilinear (smooth).
-                # 10 m/px has no real detail past ~z15 anyway.
                 "maxzoom": 15,
                 "attribution": "Contains modified Copernicus Sentinel-2 data",
             },
@@ -51,7 +43,7 @@ def _default_layers(titiler_url: str) -> list[dict[str, Any]]:
             "url": f"{base}/cog",
             "options": {
                 "collection": "sentinel-2-l2a",
-                "asset": "nir",          # raw uint16 NIR band → needs rescale
+                "asset": "nir",
                 "rescale": "0,4000",
                 "colormap_name": "greens",
                 "minzoom": 8,
@@ -65,9 +57,6 @@ def _default_layers(titiler_url: str) -> list[dict[str, Any]]:
 
 
 class MapService:
-    # Process-level layer cache: layers are near-static config, but the tile proxy
-    # looks one up per tile. Caching here keeps the high-frequency tile path off the
-    # DB pool entirely (the pool is small and must stay free for real queries).
     _LAYER_CACHE_TTL = 300.0
 
     def __init__(self) -> None:
@@ -75,8 +64,6 @@ class MapService:
 
     @staticmethod
     def layer_to_api(layer: MapLayer | dict[str, Any]) -> dict[str, Any]:
-        # Field names must match the frontend `MapLayer` type (is_active,
-        # display_order) or layers never become visible / sort as NaN.
         if isinstance(layer, MapLayer):
             options = layer.options or {}
             return {
@@ -128,7 +115,6 @@ class MapService:
         self._layer_cache[layer_id] = (now, layer)
         return layer
 
-    # Layers we have shipped at some point but no longer want in the catalogue.
     _OBSOLETE_LAYER_IDS = ("openfreemap-bright",)
 
     async def seed_defaults(self, db: AsyncSession) -> None:

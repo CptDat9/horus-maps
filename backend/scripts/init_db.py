@@ -18,7 +18,6 @@ from app.utils.logger_utils import get_logger
 
 logger = get_logger("INIT DATABASE")
 
-# alembic.ini lives at the backend root (one level up from scripts/).
 _ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
 
 

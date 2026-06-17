@@ -15,6 +15,7 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from app.constants.task_constants import TERMINAL_STATUSES
 from app.databases.postgres import AsyncSessionLocal
 from app.services.task_service import task_service
 from app.utils.logger_utils import get_logger
@@ -22,9 +23,9 @@ from app.utils.logger_utils import get_logger
 logger = get_logger("SSE")
 router = APIRouter(prefix="/api/sse", tags=["SSE"])
 
-_POLL_INTERVAL = 2      # seconds between DB polls
-_HEARTBEAT_EVERY = 15   # seconds between keep-alive pings
-_MAX_DURATION = 300     # 5 min max stream duration
+_POLL_INTERVAL = 2
+_HEARTBEAT_EVERY = 15
+_MAX_DURATION = 300
 
 
 @router.get("/tasks/{task_id}")
@@ -43,7 +44,6 @@ async def task_sse(task_id: uuid.UUID, request: Request):
                 logger.info(f"SSE client disconnected for task {task_id}")
                 break
 
-            # Heartbeat comment to keep proxies from closing the connection
             if elapsed > 0 and elapsed % _HEARTBEAT_EVERY == 0:
                 yield ": ping\n\n"
 
@@ -59,14 +59,12 @@ async def task_sse(task_id: uuid.UUID, request: Request):
                         "error_message": task.error_message,
                         "updated_at": task.updated_at.isoformat() if task.updated_at else None,
                     }
-                    event_name = "update"
-                    if task.status in ("completed", "failed"):
-                        event_name = "done"
+                    event_name = "done" if task.status in TERMINAL_STATUSES else "update"
 
                     yield f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
                     last_status = task.status
 
-                    if task.status in ("completed", "failed"):
+                    if task.status in TERMINAL_STATUSES:
                         break
 
             except Exception as e:
@@ -85,6 +83,6 @@ async def task_sse(task_id: uuid.UUID, request: Request):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",   # disable Nginx buffering
+            "X-Accel-Buffering": "no",
         },
     )

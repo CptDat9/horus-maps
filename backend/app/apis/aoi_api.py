@@ -60,12 +60,12 @@ async def create_aoi(
         aoi = await aoi_service.create(db, session_id, aoi_data)
         geojson_map = await _fetch_geojson_batch(db, [aoi])
 
-        # Fire-and-forget: trigger async AOI data extraction
         try:
+            from app.constants.task_constants import TaskType
             from app.workers.task_manager import task_manager
             await task_manager.create_task(
                 session_id=session_id,
-                task_type="extract_aoi",
+                task_type=TaskType.EXTRACT_AOI.value,
                 payload={"aoi_id": str(aoi.id)},
             )
         except Exception as e:

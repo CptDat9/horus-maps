@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
+from app.constants.task_constants import TERMINAL_STATUSES
 from app.constants.websocket_constants import task_channel
 from app.databases.postgres import AsyncSessionLocal
 from app.services.cache_service import cache_service
@@ -13,7 +14,7 @@ from app.utils.logger_utils import get_logger
 logger = get_logger("WebSocketAPI")
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
-_TERMINAL = {"completed", "failed"}
+_TERMINAL = TERMINAL_STATUSES
 
 
 async def _current_state(task_id: uuid.UUID) -> dict | None:
@@ -52,7 +53,6 @@ async def websocket_endpoint(websocket: WebSocket, task_id: uuid.UUID):
         while True:
             msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30)
             if msg is None:
-                # Keep-alive so proxies / clients don't drop an idle socket.
                 await websocket.send_json({"type": "ping"})
                 continue
             data = msg["data"]

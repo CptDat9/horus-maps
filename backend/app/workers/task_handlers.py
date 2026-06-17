@@ -1,6 +1,9 @@
 import uuid
-from typing import Any, Dict
+from typing import Any, Awaitable, Callable, Dict
 
+import httpx
+
+from app.constants.task_constants import TaskStatus, TaskType
 from app.utils.logger_utils import get_logger
 from app.databases.deps import get_db_context
 from app.services.task_service import task_service
@@ -12,51 +15,46 @@ from app.services.map_service import map_service
 
 logger = get_logger("TaskHandlers")
 
+Handler = Callable[[Any, Dict[str, Any]], Awaitable[Dict[str, Any]]]
+
 
 class TaskHandlers:
+    def __init__(self) -> None:
+        self._registry: Dict[str, Handler] = {
+            TaskType.EXTRACT_AOI.value: self._extract_aoi,
+            TaskType.TEMPORAL_COMPARISON.value: self._temporal_comparison,
+            TaskType.DETECTION.value: self._run_detection,
+            TaskType.SEARCH_ITEMS.value: self._search_items,
+            TaskType.GET_COLLECTIONS.value: self._get_collections,
+            TaskType.REFRESH_LAYERS.value: self._refresh_layers,
+            TaskType.HEAVY_REQUEST.value: self._heavy_request,
+        }
+
     async def dispatch(self, task_id: uuid.UUID, task_type: str, payload: Dict[str, Any]) -> None:
-        """Route task to the appropriate handler. Status is managed by task_manager."""
+        """Route task to its registered handler. Status is managed by task_manager."""
+        handler = self._registry.get(task_type)
         async with get_db_context() as db:
             try:
-                if task_type == "extract_aoi":
-                    result = await self._extract_aoi(db, payload)
-
-                elif task_type == "temporal_comparison":
-                    result = await self._temporal_comparison(db, payload)
-
-                elif task_type == "detection":
-                    result = await self._run_detection(db, payload)
-
-                elif task_type == "search_items":
-                    result = await self._search_items(db, payload)
-
-                elif task_type == "get_collections":
-                    result = await self._get_collections(db, payload)
-
-                elif task_type == "refresh_layers":
-                    result = await self._refresh_layers(db)
-
-                elif task_type == "heavy_request":
-                    # Queued by rate limiter — log and ack
-                    result = {
-                        "message": "Heavy request acknowledged",
-                        "path": payload.get("path"),
-                    }
-                    logger.info(f"Heavy request task acknowledged: {payload.get('path')}")
-
-                else:
+                if handler is None:
+                    logger.warning("Unhandled task type: %s", task_type)
                     result = {"message": f"Task type '{task_type}' has no specific handler"}
-                    logger.warning(f"Unhandled task type: {task_type}")
+                else:
+                    result = await handler(db, payload)
 
-                # Mark completed (task_manager called update_status("running") already)
-                await task_service.update_status(db, task_id, "completed", result=result)
-                logger.info(f"Task {task_id} ({task_type}) completed")
+                await task_service.update_status(db, task_id, TaskStatus.COMPLETED.value, result=result)
+                logger.info("Task %s (%s) completed", task_id, task_type)
 
             except Exception as e:
-                logger.error(f"Task {task_id} ({task_type}) failed: {e}", exc_info=True)
-                await task_service.update_status(db, task_id, "failed", error_message=str(e))
+                logger.error("Task %s (%s) failed: %s", task_id, task_type, e, exc_info=True)
+                await task_service.update_status(db, task_id, TaskStatus.FAILED.value, error_message=str(e))
 
-    # ------------------------------------------------------------------ #
+
+    async def _heavy_request(self, db, payload: Dict) -> Dict:
+        """Placeholder task queued by the rate limiter when a session exceeds the
+        soft threshold — acknowledged so the API surface stays protected."""
+        logger.info("Heavy request task acknowledged: %s", payload.get("path"))
+        return {"message": "Heavy request acknowledged", "path": payload.get("path")}
+
 
     async def _extract_aoi(self, db, payload: Dict) -> Dict:
         """
@@ -118,8 +116,6 @@ class TaskHandlers:
 
         from app.configs.config import Config
 
-        # The comparison is anchored to an AOI — fetch its bbox so we can crop
-        # each scene to exactly the area of interest (a focused, exportable image).
         comparison = await comparison_service.get(db, uuid.UUID(comparison_id_str))
         from sqlalchemy import text
         bbox_row = (
@@ -140,9 +136,11 @@ class TaskHandlers:
             if not item:
                 return None
             assets = (item.get("data") or {}).get("assets", {})
-            # `visual` is pre-scaled 8-bit RGB → no rescale (matches map_api).
             visual = assets.get("visual")
             return visual["href"] if visual and "href" in visual else None
+
+        color = urllib.parse.quote(Config.STAC_VISUAL_COLOR_FORMULA)
+        enhance = f"resampling={Config.TITILER_RESAMPLING}&color_formula={color}"
 
         def _tile_url(item: Dict | None) -> str | None:
             href = _cog_href(item)
@@ -151,11 +149,10 @@ class TaskHandlers:
             cog = urllib.parse.quote(href, safe="")
             return (
                 f"{Config.TITILER_PUBLIC_URL}/cog/tiles/{Config.TITILER_TMS}"
-                f"/{{z}}/{{x}}/{{y}}.png?url={cog}"
+                f"/{{z}}/{{x}}/{{y}}.png?url={cog}&{enhance}"
             )
 
         def _image_url(item: Dict | None) -> str | None:
-            """TiTiler bbox crop → one PNG of the AOI for this scene."""
             href = _cog_href(item)
             if not href or not bbox:
                 return None
@@ -163,7 +160,7 @@ class TaskHandlers:
             minx, miny, maxx, maxy = bbox
             return (
                 f"{Config.TITILER_PUBLIC_URL}/cog/bbox/"
-                f"{minx},{miny},{maxx},{maxy}.png?url={cog}&max_size=1024"
+                f"{minx},{miny},{maxx},{maxy}.png?url={cog}&max_size=1024&{enhance}"
             )
 
         result = {
@@ -183,11 +180,52 @@ class TaskHandlers:
             },
         }
 
+        await self._save_comparison_snapshots(
+            comparison_id_str, payload.get("session_id"), comparison.aoi_id,
+            bbox, enhance, {"left": _cog_href(left), "right": _cog_href(right)}, result,
+        )
+
         await comparison_service.update_status(
-            db, uuid.UUID(comparison_id_str), "completed", result
+            db, uuid.UUID(comparison_id_str), TaskStatus.COMPLETED.value, result
         )
 
         return result
+
+    @staticmethod
+    async def _save_comparison_snapshots(comparison_id, session_id, aoi_id, bbox, enhance, hrefs, result):
+        """Render each side's AOI crop to a PNG on the shared static volume so the
+        comparison history is self-contained (survives the source COG, loads fast).
+        Best-effort: a failed snapshot leaves the on-demand image_url as fallback."""
+        import os
+        import urllib.parse
+
+        from app.configs.config import Config
+
+        if not bbox or not session_id:
+            return
+        out_dir = os.path.join(Config.DETECTION_OUTPUT_DIR, "comparisons")
+        os.makedirs(out_dir, exist_ok=True)
+        minx, miny, maxx, maxy = bbox
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as client:
+            for side, href in hrefs.items():
+                if not href:
+                    continue
+                cog = urllib.parse.quote(href, safe="")
+                url = (
+                    f"{Config.TITILER_URL}/cog/bbox/"
+                    f"{minx},{miny},{maxx},{maxy}.png?url={cog}&max_size=1024&{enhance}"
+                )
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200 and resp.content:
+                        with open(os.path.join(out_dir, f"{comparison_id}_{side}.png"), "wb") as fh:
+                            fh.write(resp.content)
+                        result[side]["snapshot_url"] = (
+                            f"/api/sessions/{session_id}/aois/{aoi_id}"
+                            f"/comparisons/{comparison_id}/image/{side}"
+                        )
+                except Exception as e:
+                    logger.warning("Comparison snapshot %s/%s failed: %s", comparison_id, side, e)
 
     async def _run_detection(self, db, payload: Dict) -> Dict:
         """
@@ -211,7 +249,7 @@ class TaskHandlers:
         session_id = uuid.UUID(session_id_str)
         classes = payload.get("classes")
         object_class = payload.get("object_class", "all")
-        tile_url = payload.get("tile_url")  # active base-layer template from the FE
+        tile_url = payload.get("tile_url")
         zoom = payload.get("zoom")
         confidence = float(payload.get("confidence", 0.2))
         iou = float(payload.get("iou", 0.45))
@@ -231,7 +269,6 @@ class TaskHandlers:
         import os
         from app.configs.config import Config
 
-        # One run = one history entry; the preview is stored per run.
         run_id = uuid.uuid4()
         runs_dir = os.path.join(Config.DETECTION_OUTPUT_DIR, "runs")
         preview_path = os.path.join(runs_dir, f"{run_id}.png")
@@ -260,7 +297,6 @@ class TaskHandlers:
         ]
         meta = dict(geojson.get("metadata", {}))
         meta["has_preview"] = os.path.exists(preview_path)
-        # Persist as a NEW run (history preserved — old runs are not deleted).
         run = await detection_service.create_run(
             db, session_id, aoi_id, rows,
             classes=meta.get("classes"), meta=meta, run_id=run_id,

@@ -7,7 +7,6 @@ from app.databases.postgres import engine
 from app.models import (
     AOI,
     AppSession,
-    # Detection,
     MapLayer,
     Measurement,
     Task,
@@ -18,7 +17,6 @@ from app.utils.logger_utils import get_logger
 logger = get_logger("DROP DATABASE")
 
 APP_TABLES = [
-    # Detection.__table__,
     TemporalComparison.__table__,
     Measurement.__table__,
     Task.__table__,

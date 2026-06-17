@@ -28,11 +28,8 @@ class AOIService:
             properties=aoi_data.properties,
         )
         db.add(aoi)
-        # flush to DB (within transaction) so we can query the geometry immediately
         await db.flush()
 
-        # Pre-compute area + perimeter in the same transaction — avoids extra
-        # round-trips whenever the user creates a Measurement afterward.
         stats = await self._compute_stats(db, aoi.id)
         if stats:
             aoi.properties = {

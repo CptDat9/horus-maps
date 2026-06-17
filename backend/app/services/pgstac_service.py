@@ -30,20 +30,12 @@ logger = get_logger("PgSTACService")
 
 class PgSTACService:
     def __init__(self) -> None:
-        # Cache local-backend availability so we don't re-probe (and re-log) a
-        # missing pgstac schema / public.items table on every single tile.
-        # None = unknown, True/False = probed result.
         self._pgstac_ok: Optional[bool] = None
         self._public_items_ok: Optional[bool] = None
 
-    # ------------------------------------------------------------------ #
-    #  Collections                                                         #
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     async def _rollback(session: AsyncSession) -> None:
-        # A failed statement aborts the asyncpg transaction; without a rollback
-        # every later query in this session fails with "transaction is aborted".
         try:
             await session.rollback()
         except Exception:
@@ -95,9 +87,6 @@ class PgSTACService:
                     return c
         return None
 
-    # ------------------------------------------------------------------ #
-    #  Item search                                                         #
-    # ------------------------------------------------------------------ #
 
     async def search_items(
         self,
@@ -109,7 +98,9 @@ class PgSTACService:
         sort_by_cloud: bool = False,
     ) -> List[Dict]:
         if Config.STAC_USE_LOCAL:
-            local = await self._search_local(session, collection_ids, bbox, datetime_str, limit)
+            local = await self._search_local(
+                session, collection_ids, bbox, datetime_str, limit, sort_by_cloud
+            )
             if local:
                 return local
 
@@ -147,9 +138,8 @@ class PgSTACService:
         bbox: Optional[List[float]],
         datetime_str: Optional[str],
         limit: int,
+        sort_by_cloud: bool = False,
     ) -> List[Dict]:
-        # 1+2) PgSTAC schema (stored proc, then raw items). Skipped entirely once
-        # we've learned the schema isn't present → no per-tile log spam.
         if self._pgstac_ok is not False:
             body: Dict[str, Any] = {"limit": limit}
             if collections:
@@ -158,11 +148,15 @@ class PgSTACService:
                 body["bbox"] = bbox
             if datetime_str:
                 body["datetime"] = datetime_str
+            body["sortby"] = (
+                [{"field": "eo:cloud_cover", "direction": "asc"}]
+                if sort_by_cloud
+                else [{"field": "datetime", "direction": "desc"}]
+            )
 
             pgstac_alive = False
             try:
-                # cast(:q as jsonb) — NOT ":q::jsonb"; the latter trips SQLAlchemy's
-                # bindparam parser and emits a stray ':' → Postgres syntax error.
+                await session.execute(text("SET LOCAL search_path TO pgstac, public"))
                 sql = text("SELECT pgstac.search(cast(:q as jsonb))")
                 row = (await session.execute(sql, {"q": json.dumps(body)})).scalar_one_or_none()
                 pgstac_alive = True
@@ -208,13 +202,11 @@ class PgSTACService:
                     logger.debug("pgstac.items raw SQL unavailable: %s", e)
                     await self._rollback(session)
 
-            # Remember the schema's presence so future tiles skip these probes.
             self._pgstac_ok = pgstac_alive
             if not pgstac_alive:
                 logger.info("PgSTAC schema not present — using remote STAC fallback")
 
-        # 3) public.items app fallback table.
-        if self._public_items_ok is not False:
+        if self._pgstac_ok is False and self._public_items_ok is not False:
             try:
                 stmt = select(Item)
                 if collections:
@@ -241,9 +233,6 @@ class PgSTACService:
             "datetime": f.get("properties", {}).get("datetime"),
         }
 
-    # ------------------------------------------------------------------ #
-    #  Single item                                                         #
-    # ------------------------------------------------------------------ #
 
     async def get_item(
         self,
