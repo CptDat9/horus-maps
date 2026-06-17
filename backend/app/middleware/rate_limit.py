@@ -3,14 +3,24 @@ Session-scoped fixed-window rate limiter (Redis-backed, fail-open).
 
 Design:
 - Only *mutating* requests (POST/PUT/PATCH/DELETE) are throttled. Reads — map
-  tiles, layer/STAC lookups, SSE, health, docs — are never limited, so map
+  tiles, layer/STAC lookups, SSE/WS, health, docs — are never limited, so map
   browsing stays smooth and we don't create a Redis key per tile.
-- The window is keyed per session (X-Session-ID), not per path, so the limit is
-  a real global budget rather than a free pass for every distinct URL.
-- Heavy domain operations (AOI extract, temporal comparison, detection) are
-  offloaded to RabbitMQ at the *endpoint* layer (task_manager), which is the
-  correct place — the middleware only protects the API surface.
+- The window is keyed per session (path uses /api/sessions/{id}/…, falling back
+  to the X-Session-ID header), so the limit is a real per-user budget rather
+  than a free pass for every distinct URL.
+- Two tiers (both from rate_limit_config), so a burst of legitimate background-
+  task submissions isn't punished like an abusive flood:
+    count <= NORMAL_LIMIT        → pass.
+    NORMAL_LIMIT < count <= QUEUE_LIMIT
+                                 → pass, but tag the response `X-RateLimit-Tier:
+                                   degraded` so the client/UI knows it's near the
+                                   ceiling. Heavy domain ops are already offloaded
+                                   to RabbitMQ at the endpoint layer, so the work
+                                   itself is queued regardless.
+    count > QUEUE_LIMIT          → 429 with Retry-After.
 """
+import re
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,8 +31,19 @@ from app.services.cache_service import cache_service
 
 logger = get_logger("RateLimitMiddleware")
 
-_EXEMPT_PREFIXES = ("/health", "/docs", "/redoc", "/openapi.json", "/ws", "/api/sse")
+_EXEMPT_PREFIXES = (
+    "/health", "/docs", "/redoc", "/openapi.json", "/ws", "/api/sse",
+    "/api/stac", "/api/maps/search", "/api/maps/collections",
+)
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_SESSION_IN_PATH = re.compile(r"/api/sessions/([^/]+)")
+
+
+def _session_key(request: Request) -> str:
+    match = _SESSION_IN_PATH.search(request.url.path)
+    if match:
+        return match.group(1)
+    return request.headers.get("X-Session-ID", "anonymous")
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -33,34 +54,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        session_id = request.headers.get("X-Session-ID", "anonymous")
-        key = f"rate:{session_id}"
+        normal = rate_limit_config.NORMAL_LIMIT
+        ceiling = max(rate_limit_config.QUEUE_LIMIT, normal)
+        key = f"rate:{_session_key(request)}"
 
         try:
-
-            current = await cache_service.client.incr(key)
-            if current == 1:
-                await cache_service.client.expire(key, rate_limit_config.WINDOW_SECS)
-            ttl = await cache_service.client.ttl(key)
+            count, ttl = await cache_service.incr_with_ttl(key, rate_limit_config.WINDOW_SECS)
         except Exception as err:
             logger.warning("Rate limit Redis error (%s), allowing request", err)
             return await call_next(request)
 
-        if current > rate_limit_config.NORMAL_LIMIT:
+        if count > ceiling:
             retry_after = ttl if ttl and ttl > 0 else rate_limit_config.WINDOW_SECS
-            logger.warning("Rate limited: session=%s count=%s", session_id, current)
+            logger.warning("Rate limited (hard): session=%s count=%s", key, count)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau."},
                 headers={
                     "Retry-After": str(retry_after),
-                    "X-RateLimit-Limit": str(rate_limit_config.NORMAL_LIMIT),
+                    "X-RateLimit-Limit": str(normal),
                     "X-RateLimit-Remaining": "0",
                 },
             )
 
         response = await call_next(request)
-        remaining = max(0, rate_limit_config.NORMAL_LIMIT - current)
-        response.headers["X-RateLimit-Limit"] = str(rate_limit_config.NORMAL_LIMIT)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Limit"] = str(normal)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, normal - count))
+        if count > normal:
+            response.headers["X-RateLimit-Tier"] = "degraded"
         return response

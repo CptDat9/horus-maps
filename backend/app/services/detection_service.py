@@ -15,8 +15,6 @@ from app.services.session_service import session_service
 
 
 class DetectionService:
-    # ------------------------------------------------------------------ #
-    # Runs (history per AOI)
 
     async def create_run(
         self,
@@ -36,7 +34,7 @@ class DetectionService:
             session_id=session_id, aoi_id=aoi_id, classes=classes, meta=meta, count=0,
         )
         db.add(run)
-        await db.flush()  # get run.id
+        await db.flush()
 
         rows = [
             Detection(
@@ -44,7 +42,6 @@ class DetectionService:
                 aoi_id=aoi_id,
                 run_id=run.id,
                 object_type=d.object_type,
-                # extended=True → parse GeoJSON via ST_GeomFromGeoJSON.
                 geometry=WKTElement(json.dumps(d.geometry), srid=4326, extended=True),
                 confidence=d.confidence,
                 properties=d.properties,
@@ -87,11 +84,9 @@ class DetectionService:
     async def delete_run(self, db: AsyncSession, run_id: uuid.UUID) -> None:
         run = await db.get(DetectionRun, run_id)
         if run:
-            await db.delete(run)  # detections cascade
+            await db.delete(run)
             await db.commit()
 
-    # ------------------------------------------------------------------ #
-    # Detections
 
     async def list_by_run(self, db: AsyncSession, run_id: uuid.UUID) -> list[Detection]:
         stmt = select(Detection).where(Detection.run_id == run_id)

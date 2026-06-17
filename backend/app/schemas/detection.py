@@ -10,11 +10,8 @@ ObjectClass = Literal["all", "aircraft", "vessels", "vehicles"]
 class DetectionJobCreate(BaseModel):
     """Request to run object detection over an AOI (queued as a background task)."""
 
-    # Explicit DOTA class ids to detect. If omitted, falls back to object_class.
     classes: Optional[list[int]] = Field(None)
     object_class: ObjectClass = Field("all")
-    # The map's active base-layer XYZ tile template — detection runs on the SAME
-    # imagery the user is viewing. Falls back to the default source if invalid.
     tile_url: Optional[str] = Field(None)
     zoom: Optional[int] = Field(None, ge=14, le=22)
     confidence: float = Field(0.2, ge=0.05, le=0.95)

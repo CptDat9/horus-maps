@@ -23,7 +23,6 @@ class TaskWorker:
 
     async def start(self) -> None:
         logger.info("Horus Maps Task Worker starting...")
-        # Needed so task status updates can be published to API WebSocket clients.
         await cache_service.connect()
         self.connection = await connect_robust(rabbitmq_config.URL)
         self.channel, _, queue = await setup_topology(self.connection, publisher_confirms=False)
@@ -36,14 +35,12 @@ class TaskWorker:
             try:
                 loop.add_signal_handler(sig, self._stop.set)
             except NotImplementedError:
-                pass  # Windows
+                pass
 
         await self._stop.wait()
         await self.stop()
 
     async def process_message(self, message: AbstractIncomingMessage) -> None:
-        # requeue=False: a failed message is dead-lettered (via x-dead-letter-
-        # exchange) instead of being redelivered forever (poison-message loop).
         async with message.process(requeue=False):
             body = json.loads(message.body.decode())
             task_type = body.get("task_type")
@@ -56,8 +53,6 @@ class TaskWorker:
 
             task_id = uuid.UUID(raw_task_id)
             logger.info("Processing task %s | type=%s", task_id, task_type)
-            # task_manager.process_task catches handler errors and marks the task
-            # 'failed', so it returns normally and the message is ack'd.
             await task_manager.process_task(task_id, task_type, payload)
 
     async def stop(self) -> None:

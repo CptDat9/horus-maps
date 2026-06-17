@@ -26,7 +26,6 @@ def _parse_dt(value: Any) -> Optional[datetime]:
     if not value or not isinstance(value, str):
         return None
     try:
-        # STAC datetimes are RFC3339 ("...Z"). fromisoformat needs "+00:00".
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
@@ -48,7 +47,6 @@ class StacClient:
         self._client: Optional[httpx.AsyncClient] = None
 
     def _http(self) -> httpx.AsyncClient:
-        # Lazily created so the singleton can be imported without a running loop.
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
@@ -82,10 +80,8 @@ class StacClient:
 
         cloud = max_cloud_cover if max_cloud_cover is not None else Config.STAC_MAX_CLOUD_COVER
         if cloud is not None:
-            # STAC `query` extension — supported by Earth Search.
             body["query"] = {"eo:cloud_cover": {"lte": cloud}}
 
-        # Least-cloudy first for tile rendering; newest first for browsing.
         body["sortby"] = (
             [{"field": "properties.eo:cloud_cover", "direction": "asc"}]
             if sort_by_cloud
@@ -111,7 +107,6 @@ class StacClient:
     async def get_item(
         self, item_id: str, collection_id: Optional[str] = None
     ) -> Optional[dict]:
-        # Prefer the canonical item endpoint when the collection is known.
         if collection_id:
             try:
                 resp = await self._http().get(
@@ -122,7 +117,6 @@ class StacClient:
             except httpx.HTTPError as e:
                 logger.warning("Remote STAC get_item failed: %s", e)
 
-        # Otherwise resolve by id via search.
         try:
             resp = await self._http().post("/search", json={"ids": [item_id], "limit": 1})
             resp.raise_for_status()

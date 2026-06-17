@@ -11,9 +11,6 @@ class NotFound(Exception):
     """Custom exception to indicate model not found in database"""
 
     def __init__(self, message: str = ""):
-        # BUG FIX: previously called `get_logger.debug(...)` (a function, not a
-        # logger) which raised AttributeError on construction — so every "not
-        # found" path 500'd instead of 404'ing. Now logs and preserves message.
         logger.debug(message)
         super().__init__(message)
 

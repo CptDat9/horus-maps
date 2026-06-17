@@ -23,18 +23,14 @@ from app.utils.logger_utils import get_logger
 
 logger = get_logger("Imagery")
 
-# Standard slippy-map tile size (Google/Esri/OSM all use 256-px tiles).
 _TILE_PX = 256
 
-# Tile download tuning — providers can be slow/flaky, so fetch concurrently and
-# retry instead of letting one slow tile time out the whole job.
 _TILE_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
 _TILE_RETRIES = 3
 _FETCH_WORKERS = 8
 _HTTP_HEADERS = {"User-Agent": "horus-maps/1.0 (+imagery)"}
-_MIN_ZOOM = 15  # below this, small objects are unrecoverable even on a huge AOI
+_MIN_ZOOM = 15
 
-# Named fallback sources (Google = the app's default high-res basemap).
 TILE_SOURCES: Dict[str, str] = {
     "google": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
     "esri": (
@@ -44,8 +40,6 @@ TILE_SOURCES: Dict[str, str] = {
 }
 _DEFAULT_SOURCE = "google"
 
-# Explicit host allowlist — prevents a client-supplied tile_url from turning the
-# worker into an SSRF proxy.
 _ALLOWED_TILE_HOSTS = {
     "mt0.google.com", "mt1.google.com", "mt2.google.com", "mt3.google.com",
     "server.arcgisonline.com",
@@ -105,15 +99,21 @@ class ImageryProvider:
     """Fetches and stitches XYZ tiles into a georeferenced mosaic."""
 
     @staticmethod
-    def _zoom_for_budget(bbox: Tuple[float, float, float, float], ideal: int, budget: int) -> int:
-        """Highest zoom ≤ ideal whose mosaic stays within `budget` tiles."""
+    def _zoom_for_budget(
+        bbox: Tuple[float, float, float, float],
+        ideal: int,
+        budget: int,
+        min_zoom: int = _MIN_ZOOM,
+    ) -> int:
+        """Highest zoom ≤ ideal whose mosaic stays within `budget` tiles, never
+        going below `min_zoom` (large objects tolerate a lower floor than cars)."""
         min_lon, min_lat, max_lon, max_lat = bbox
-        for z in range(ideal, _MIN_ZOOM - 1, -1):
+        for z in range(ideal, min_zoom - 1, -1):
             x0, y0 = _deg2tile(max_lat, min_lon, z)
             x1, y1 = _deg2tile(min_lat, max_lon, z)
             if (x1 - x0 + 1) * (y1 - y0 + 1) <= budget:
                 return z
-        return _MIN_ZOOM
+        return min_zoom
 
     def _fetch_mosaic(
         self,
@@ -130,8 +130,8 @@ class ImageryProvider:
         """
         budget = max_tiles or Config.DETECTION_MAX_TILES
         min_lon, min_lat, max_lon, max_lat = bbox
-        x0, y0 = _deg2tile(max_lat, min_lon, z)   # top-left
-        x1, y1 = _deg2tile(min_lat, max_lon, z)   # bottom-right
+        x0, y0 = _deg2tile(max_lat, min_lon, z)
+        x1, y1 = _deg2tile(min_lat, max_lon, z)
         cols, rows = x1 - x0 + 1, y1 - y0 + 1
 
         if cols * rows > budget:
@@ -154,7 +154,7 @@ class ImageryProvider:
                     resp = client.get(url)
                     resp.raise_for_status()
                     return Image.open(io.BytesIO(resp.content)).convert("RGB")
-                except Exception as e:  # transient network hiccup
+                except Exception as e:
                     if attempt == _TILE_RETRIES - 1:
                         logger.warning("Tile z=%s x=%s y=%s failed (%s) — blank", z, xt, yt, e)
                         return None

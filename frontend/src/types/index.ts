@@ -81,6 +81,7 @@ export interface TemporalComparison {
   left_item_id: string;
   right_item_id: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
+  task_id?: string | null;
   comparison_result?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   created_at: string;

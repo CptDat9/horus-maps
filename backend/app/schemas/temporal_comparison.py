@@ -18,6 +18,7 @@ class TemporalComparisonResponse(BaseModel):
     left_item_id: str
     right_item_id: str
     status: str
+    task_id: Optional[uuid.UUID] = None
     comparison_result: Optional[dict] = None
     metadata: Optional[dict] = Field(None, validation_alias="meta")
     created_at: datetime

@@ -25,8 +25,6 @@ class TemporalComparisonService:
         if not aoi or aoi.session_id != session_id:
             raise ValueError(f"AOI {aoi_id} not found")
 
-        # Validate items via pgstac_service — works for both pgstac schema and
-        # public.items, unlike db.get(Item, ...) which only checks public.items.
         left = await pgstac_service.get_item(db, comparison_data.left_item_id)
         right = await pgstac_service.get_item(db, comparison_data.right_item_id)
         if not left or not right:
@@ -52,6 +50,16 @@ class TemporalComparisonService:
         comparison = await db.get(TemporalComparison, comparison_id)
         if not comparison:
             raise NotFound(f"Temporal comparison {comparison_id} not found")
+        return comparison
+
+    async def set_task_id(
+        self, db: AsyncSession, comparison_id: uuid.UUID, task_id: uuid.UUID
+    ) -> TemporalComparison:
+        """Link the comparison to the background task that builds it."""
+        comparison = await self.get(db, comparison_id)
+        comparison.task_id = task_id
+        await db.commit()
+        await db.refresh(comparison)
         return comparison
 
     async def update_status(

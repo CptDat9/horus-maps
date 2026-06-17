@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional, Union
+from typing import Any, Awaitable, Callable, Optional
 from redis.asyncio import Redis, from_url
 from app.databases.redis_cached import RedisCache
 from app.configs.config import RedisConfig
@@ -38,9 +38,6 @@ class CacheService(RedisCache):
         if not self.client:
             raise RuntimeError("Redis Client chưa được kết nối.")
         try:
-            # default=str so datetime / UUID values inside cached STAC items are
-            # serialized instead of raising "Object of type datetime is not JSON
-            # serializable".
             string_value = (
                 json.dumps(value, default=str)
                 if isinstance(value, (dict, list))
@@ -70,6 +67,30 @@ class CacheService(RedisCache):
         except Exception as e:
             logger.error(f"Lỗi ghi Cache (Bytes) với key={key}: {str(e)}")
             return False
+
+    async def get_or_set(
+        self,
+        key: str,
+        factory: Callable[[], Awaitable[Any]],
+        expire: Optional[int] = None,
+    ) -> Any:
+        """Read-through cache for JSON values: return the cached value, else call
+        the async ``factory``, cache its result, and return it. Cache faults
+        (Redis down, serialization) never block the caller — the freshly computed
+        value is always returned."""
+        try:
+            cached = await self.get(key)
+            if cached is not None:
+                return cached
+        except Exception as e:
+            logger.warning(f"Cache read failed for key={key}: {e}")
+
+        value = await factory()
+        try:
+            await self.set(key, value, expire=expire)
+        except Exception as e:
+            logger.warning(f"Cache write failed for key={key}: {e}")
+        return value
 
 
 cache_service = CacheService()

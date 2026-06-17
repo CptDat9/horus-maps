@@ -26,14 +26,11 @@ class TemporalComparison(Base):
     aoi_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("aoi.id", ondelete="CASCADE"), nullable=False
     )
-    # BUG FIX: no ForeignKey to public.items. STAC items live in the PgSTAC
-    # schema or a remote catalog (Earth Search) that this app does not own, so a
-    # FK against the (empty) public.items table caused IntegrityError on every
-    # comparison insert. Item IDs are opaque catalog identifiers.
     left_item_id: Mapped[str] = mapped_column(String, nullable=False)
     right_item_id: Mapped[str] = mapped_column(String, nullable=False)
     comparison_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     meta: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

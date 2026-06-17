@@ -12,7 +12,6 @@ from app.utils.logger_utils import get_logger
 
 logger = get_logger("MeasurementService")
 
-# Unit conversion factors from SI base units
 _AREA_FACTORS: dict[str, float] = {
     "m2": 1.0,
     "sqm": 1.0,

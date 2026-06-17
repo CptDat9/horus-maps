@@ -1,3 +1,5 @@
+import asyncio
+import os
 import urllib.parse
 
 import httpx
@@ -14,12 +16,8 @@ from app.services.pgstac_service import pgstac_service
 from app.utils.logger_utils import get_logger
 from app.utils.tile_utils import coarse_tile, tile_to_bbox
 
-# Sentinel-2 assets whose pixels are already display-ready 8-bit RGB and must
-# NOT be linearly rescaled like the raw uint16 reflectance bands.
 _PRESCALED_ASSETS = {"visual", "rendered_preview", "preview"}
 
-# Browsers (and any CDN) may cache rendered tiles for a day — pans/zooms back to a
-# visited area then cost nothing, which is the single biggest perceived speed-up.
 _TILE_CACHE_HEADERS = {"Cache-Control": "public, max-age=86400"}
 
 logger = get_logger("MapAPI")
@@ -29,6 +27,11 @@ _http = httpx.AsyncClient(
     timeout=httpx.Timeout(30.0, connect=5.0),
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
 )
+
+_TILE_FETCH_ATTEMPTS = 3
+
+_TILE_FETCH_CONCURRENCY = int(os.getenv("TILE_FETCH_CONCURRENCY", "8"))
+_tile_sem = asyncio.Semaphore(_TILE_FETCH_CONCURRENCY)
 
 
 @router.get("/layers", status_code=status.HTTP_200_OK)
@@ -83,9 +86,6 @@ async def get_map_tile(
     else:
         raise HTTPException(status_code=400, detail="Unsupported layer type")
 
-    # Release the pooled DB connection BEFORE the slow upstream fetch. A map load
-    # fires dozens of tile requests at once; holding a connection across a multi-
-    # second COG read would drain the pool and stall every other endpoint too.
     await db.close()
     return await _proxy_tile(target_url, cache_key)
 
@@ -98,11 +98,8 @@ async def _build_stac_tile_url(db, layer: dict, z: int, x: int, y: int) -> str |
     asset_key = options.get("asset", "visual")
     colormap = options.get("colormap_name")
     color_formula = None if colormap else options.get("color_formula")
-    # Pre-scaled RGB assets (visual) render near-black if rescaled, so only honour
-    # an explicit rescale for raw reflectance bands.
     rescale = None if asset_key in _PRESCALED_ASSETS else options.get("rescale")
 
-    # Group neighbouring tiles onto one scene lookup to limit DB/remote hits.
     cz, cx, cy = coarse_tile(z, x, y)
     item_cache_key = f"stac_item:{collection}:{cz}:{cx}:{cy}"
     item_data: dict | None = None
@@ -132,7 +129,6 @@ async def _build_stac_tile_url(db, layer: dict, z: int, x: int, y: int) -> str |
         return None
 
     cog_url = urllib.parse.quote(href, safe="")
-    # bilinear renders up-scaled 10 m Sentinel-2 far less blocky than the default.
     params = [f"url={cog_url}", "resampling=bilinear"]
     if rescale:
         params.append(f"rescale={rescale}")
@@ -146,25 +142,26 @@ async def _build_stac_tile_url(db, layer: dict, z: int, x: int, y: int) -> str |
 
 
 async def _proxy_tile(target_url: str, cache_key: str) -> Response:
-    """Fetch tile from upstream and cache the result. A slow/edge tile degrades to
-    an empty 204 (basemap shows through) instead of a broken tile + 5xx spam."""
-    for attempt in range(2):
-        try:
-            resp = await _http.get(target_url)
-            break
-        except httpx.RequestError as err:
-            if attempt == 0:
+    """Fetch a tile from TiTiler and cache it. A transient COG read failure on S3
+    (connection error or upstream 5xx) is retried, then degrades to an empty 204 so
+    the basemap shows through instead of a broken tile + 502 spam."""
+    resp = None
+    async with _tile_sem:
+        for attempt in range(_TILE_FETCH_ATTEMPTS):
+            try:
+                resp = await _http.get(target_url)
+            except httpx.RequestError as err:
+                logger.warning("Tile fetch %s (try %d/%d) %s",
+                               type(err).__name__, attempt + 1, _TILE_FETCH_ATTEMPTS, target_url[:120])
+                resp = None
                 continue
-            logger.warning("Tile upstream %s (giving up) %s", type(err).__name__, target_url[:120])
-            return Response(status_code=204)
+            if resp.status_code < 500:
+                break
+            logger.warning("Tile upstream %s (try %d/%d): %s",
+                           resp.status_code, attempt + 1, _TILE_FETCH_ATTEMPTS, resp.text[:200])
 
-    if resp.status_code in (204, 404):
+    if resp is None or resp.status_code != 200:
         return Response(status_code=204)
-    if resp.status_code != 200:
-        logger.warning(
-            "Tile upstream %s for %s: %s", resp.status_code, target_url, resp.text[:300]
-        )
-        raise HTTPException(status_code=502, detail="Upstream tile server error")
 
     raw = resp.content
     try:

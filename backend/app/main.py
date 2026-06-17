@@ -31,8 +31,6 @@ logger = get_logger("App")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Degrade gracefully: a missing Redis/RabbitMQ/DB at boot must not prevent
-    # the API from starting (read-only endpoints can still serve).
     for name, coro in (("redis", cache_service.connect()), ("rabbitmq", rabbitmq_service.connect())):
         try:
             await coro
@@ -47,6 +45,7 @@ async def lifespan(app: FastAPI):
     await cache_service.disconnect()
     await rabbitmq_service.close()
     await stac_client.close()
+    await stac_api.close()
 
 
 app = FastAPI(
@@ -56,9 +55,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(RateLimitMiddleware)
-# NOTE: allow_credentials with "*" origins is invalid per the CORS spec; when
-# credentials are enabled the browser rejects a wildcard. Only send credentials
-# when explicit origins are configured.
 _origins = config.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,

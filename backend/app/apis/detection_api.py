@@ -67,9 +67,6 @@ def _run_preview_path(run_id: uuid.UUID) -> str:
     return os.path.join(Config.DETECTION_OUTPUT_DIR, "runs", f"{run_id}.png")
 
 
-# --------------------------------------------------------------------------- #
-# Run a job
-
 @router.post("", response_model=DetectionJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def run_detection(
     session_id: uuid.UUID,
@@ -81,12 +78,13 @@ async def run_detection(
     tracks progress over SSE/WebSocket and reloads detections when done."""
     await _ensure_aoi(db, session_id, aoi_id)
 
+    from app.constants.task_constants import TaskType
     from app.workers.task_manager import task_manager
 
     try:
         task = await task_manager.create_task(
             session_id=session_id,
-            task_type="detection",
+            task_type=TaskType.DETECTION.value,
             payload={
                 "aoi_id": str(aoi_id),
                 "classes": job.classes,
@@ -106,9 +104,6 @@ async def run_detection(
         message="Detection job queued",
     )
 
-
-# --------------------------------------------------------------------------- #
-# Read detections / history
 
 @router.get("", response_model=DetectionListResponse)
 async def list_detections(
@@ -189,9 +184,6 @@ async def latest_preview(
         raise HTTPException(status_code=404, detail="No detection preview yet")
     return FileResponse(path, media_type="image/png", filename=f"detection_{run.id}.png")
 
-
-# --------------------------------------------------------------------------- #
-# Delete
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_detections(

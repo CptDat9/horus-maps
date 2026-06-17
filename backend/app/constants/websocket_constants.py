@@ -6,7 +6,6 @@ class WSChannels:
     MAP_UPDATE = "map_update"
 
 
-# Redis pub/sub channel carrying status updates for a single task.
 TASK_CHANNEL_PREFIX = "task"
 
 

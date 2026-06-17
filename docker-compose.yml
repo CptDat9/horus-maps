@@ -44,6 +44,16 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
+    # Gate api/worker startup on a ready broker — without this they race the
+    # broker's boot and the first connect fails ("Connect call failed … 5672").
+    # check_port_connectivity waits until the AMQP listener (5672) actually
+    # accepts connections; plain `ping` reports healthy a beat too early.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
 
   titiler:
     image: ghcr.io/developmentseed/titiler:latest
@@ -63,16 +73,59 @@ services:
       - GDAL_BAND_BLOCK_CACHE=HASHSET
       - CPL_TMP=/tmp
       # ---- COG-from-S3 read speed (the fix for tile ReadTimeouts) ----
-      - GDAL_CACHEMAX=512                       # MB of block cache
+      # Cache sizes are PER WORKER, so N workers multiply them. On a small host
+      # (this dev box has ~4 GB) the old 512 MB × 6 budget starved RAM and tripped
+      # gunicorn WORKER TIMEOUTs → "Read failed" / RemoteProtocolError tiles.
+      - GDAL_CACHEMAX=128                        # MB block cache (per worker)
       - VSI_CACHE=TRUE
-      - VSI_CACHE_SIZE=536870912                # 512 MB per-file curl cache
-      - CPL_VSIL_CURL_CACHE_SIZE=536870912
-      - GDAL_INGESTED_BYTES_AT_OPEN=32768       # grab COG header in one range req
-      - GDAL_HTTP_MAX_RETRY=3
+      - VSI_CACHE_SIZE=134217728                 # 128 MB per-file curl cache
+      - CPL_VSIL_CURL_CACHE_SIZE=134217728
+      - GDAL_INGESTED_BYTES_AT_OPEN=32768        # grab COG header in one range req
+      - GDAL_HTTP_MAX_RETRY=5
       - GDAL_HTTP_RETRY_DELAY=1
       - GDAL_HTTP_TIMEOUT=30
-      # Serve tiles concurrently so a viewport burst doesn't queue + time out.
+      # A slow S3 COG read must not trip gunicorn's default 30 s worker timeout —
+      # a killed worker drops the socket → RemoteProtocolError on the API side.
+      - GUNICORN_CMD_ARGS=--timeout 120 --graceful-timeout 30
+      # Workers: enough to hide S3 latency, few enough to fit RAM. 4 suits a ~4 GB
+      # host; raise on a bigger box, lower further if memory is tight.
       - WEB_CONCURRENCY=4
+
+  # Spec-compliant STAC API (stac-fastapi-pgstac) over the PgSTAC schema in the
+  # shared Postgres. Reuses the backend image; the command installs/updates the
+  # PgSTAC schema (idempotent) before serving. The main API proxies /api/stac/*
+  # here, and the tile path queries the same PgSTAC directly.
+  stac:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: horus-maps-stac
+    restart: unless-stopped
+    command: >
+      sh -c "pypgstac migrate --dsn postgresql://postgres:postgres@postgres:5432/horus_maps &&
+             uvicorn app.stac.app:app --host 0.0.0.0 --port 8080"
+    environment:
+      # stac-fastapi-pgstac reader/writer pool
+      POSTGRES_USER: postgres
+      POSTGRES_PASS: postgres
+      POSTGRES_DBNAME: horus_maps
+      POSTGRES_HOST_READER: postgres
+      POSTGRES_HOST_WRITER: postgres
+      POSTGRES_PORT: 5432
+      # Used by scripts/ingest_sentinel.py (app PostgresConfig) to reach the DB
+      POSTGRES_HOST: postgres
+      STAC_FASTAPI_TITLE: Horus Maps STAC API
+      STAC_FASTAPI_DESCRIPTION: Sentinel-2 catalogue (PgSTAC) for Horus Maps
+    # Dev: live host code so re-running the ingest script (docker compose exec)
+    # picks up edits with no rebuild. Editing the served app needs a
+    # `docker compose restart stac`. Safe here — STAC needs no baked model weights.
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   api:
     build:
@@ -87,6 +140,7 @@ services:
       RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672/
       TITILER_URL: http://titiler:80              # server-side proxy
       TITILER_PUBLIC_URL: http://localhost:8081   # browser-facing (compare tiles)
+      STAC_API_URL: http://stac:8080              # /api/stac/* proxy target
       DETECTION_OUTPUT_DIR: /app/static/detections # shared with worker (volume)
     ports:
       - "8000:8000"
@@ -95,6 +149,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      stac:
+        condition: service_started
 
   worker:
     build:
@@ -109,6 +167,8 @@ services:
       - detection_data:/app/static/detections
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   frontend:
