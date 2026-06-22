@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from geoalchemy2 import Geometry
 
 from app.databases.base import Base
-
+# Luu JSON STAC item
 
 class Item(Base):
     """
@@ -26,7 +26,7 @@ class Item(Base):
     )
     data: Mapped[dict] = mapped_column(JSONB, nullable=False)
     geometry = mapped_column(
-        Geometry(geometry_type="GEOMETRY", srid=4326), nullable=False
+        Geometry(geometry_type="GEOMETRY", srid=4326), nullable=False #4326: he toa do WGS84 (GPS)
     )
     datetime: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
