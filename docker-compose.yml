@@ -1,13 +1,10 @@
 name: horus-maps
 
-# Full stack (frontend + api + worker + infra):
-#   docker compose up -d --build
-#   App → http://localhost:3000 , API → http://localhost:8000
-#   RabbitMQ UI → http://localhost:15672 (admin/admin)
+# Toàn bộ hệ thống (frontend + api + worker + hạ tầng):
+#   Chạy lệnh: docker compose up -d --build
+#   Giao diện App → http://localhost:3000 , API → http://localhost:8000
+#   Giao diện quản lý RabbitMQ → http://localhost:15672 (tài khoản: admin/admin)
 #
-# Shared values come from the root .env; the *_HOST overrides below point the
-# containers at the service network (in .env those are localhost for native runs).
-
 services:
   postgres:
     image: postgis/postgis:16-3.4
@@ -44,10 +41,11 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
-    # Gate api/worker startup on a ready broker — without this they race the
-    # broker's boot and the first connect fails ("Connect call failed … 5672").
-    # check_port_connectivity waits until the AMQP listener (5672) actually
-    # accepts connections; plain `ping` reports healthy a beat too early.
+    # Giữ cho api/worker không khởi động trước khi RabbitMQ thực sự sẵn sàng.
+    # Nếu không có cấu hình này, các ứng dụng sẽ tranh chấp quyền khởi động với broker
+    # và lượt kết nối đầu tiên sẽ bị lỗi ("Connect call failed … 5672").
+    # Lệnh `check_port_connectivity` sẽ đợi cho đến khi cổng AMQP (5672) thực sự chấp nhận kết nối;
+    # trong khi lệnh `ping` thông thường sẽ báo trạng thái "healthy" (khỏe mạnh) hơi sớm một chút.
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
@@ -60,9 +58,9 @@ services:
     container_name: horus-maps-titiler
     restart: unless-stopped
     ports:
-      - "8081:80"   # image's gunicorn listens on 80
+      - "8081:80"   # Cổng 80 là cổng mặc định gunicorn của image này lắng nghe
     environment:
-      # GDAL flags to read the PUBLIC Sentinel-2 COG bucket anonymously (not AWS deploy).
+      # Các cấu hình GDAL để đọc bộ lưu trữ (bucket) Sentinel-2 COG công khai ẩn danh (không cần deploy AWS).
       - AWS_NO_SIGN_REQUEST=YES
       - AWS_REGION=us-west-2
       - GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
@@ -72,29 +70,29 @@ services:
       - GDAL_HTTP_VERSION=2
       - GDAL_BAND_BLOCK_CACHE=HASHSET
       - CPL_TMP=/tmp
-      # ---- COG-from-S3 read speed (the fix for tile ReadTimeouts) ----
-      # Cache sizes are PER WORKER, so N workers multiply them. On a small host
-      # (this dev box has ~4 GB) the old 512 MB × 6 budget starved RAM and tripped
-      # gunicorn WORKER TIMEOUTs → "Read failed" / RemoteProtocolError tiles.
-      - GDAL_CACHEMAX=128                        # MB block cache (per worker)
+      # ---- Tốc độ đọc COG từ S3 (Giải pháp sửa lỗi quá hạn - ReadTimeout khi tải tile) ----
+      # Kích thước bộ nhớ đệm (Cache) được tính TRÊN MỖI WORKER, vì vậy N workers sẽ nhân số lượng này lên.
+      # Trên một máy chủ nhỏ (máy dev này có khoảng ~4 GB RAM), mức cấu hình cũ là 512 MB × 6 worker
+      # đã làm cạn kiệt RAM và kích hoạt lỗi WORKER TIMEOUT của gunicorn → Gây ra lỗi "Read failed" / lỗi tile RemoteProtocolError.
+      - GDAL_CACHEMAX=128                        # Bộ nhớ đệm block (MB) trên mỗi worker
       - VSI_CACHE=TRUE
-      - VSI_CACHE_SIZE=134217728                 # 128 MB per-file curl cache
+      - VSI_CACHE_SIZE=134217728                # 128 MB bộ nhớ đệm curl cho mỗi file
       - CPL_VSIL_CURL_CACHE_SIZE=134217728
-      - GDAL_INGESTED_BYTES_AT_OPEN=32768        # grab COG header in one range req
+      - GDAL_INGESTED_BYTES_AT_OPEN=32768        # Đọc dữ liệu header của COG ngay trong một request range
       - GDAL_HTTP_MAX_RETRY=5
       - GDAL_HTTP_RETRY_DELAY=1
       - GDAL_HTTP_TIMEOUT=30
-      # A slow S3 COG read must not trip gunicorn's default 30 s worker timeout —
-      # a killed worker drops the socket → RemoteProtocolError on the API side.
+      # Quá trình đọc S3 COG chậm không được phép làm kích hoạt bộ giới hạn thời gian (timeout) 30 giây mặc định của gunicorn worker 
+      # một worker bị tắt (killed) sẽ làm ngắt kết nối socket → gây ra lỗi RemoteProtocolError ở phía API.
       - GUNICORN_CMD_ARGS=--timeout 120 --graceful-timeout 30
-      # Workers: enough to hide S3 latency, few enough to fit RAM. 4 suits a ~4 GB
-      # host; raise on a bigger box, lower further if memory is tight.
+      # Số lượng Worker: Vừa đủ để che giấu độ trễ của S3, nhưng cũng đủ ít để không bị tràn RAM.
+      # Con số 4 phù hợp cho máy cấu hình ~4 GB RAM; tăng lên nếu máy mạnh hơn, giảm xuống nếu RAM bị bó hẹp.
       - WEB_CONCURRENCY=4
 
-  # Spec-compliant STAC API (stac-fastapi-pgstac) over the PgSTAC schema in the
-  # shared Postgres. Reuses the backend image; the command installs/updates the
-  # PgSTAC schema (idempotent) before serving. The main API proxies /api/stac/*
-  # here, and the tile path queries the same PgSTAC directly.
+  # Khởi chạy STAC API đúng chuẩn (stac-fastapi-pgstac) dựa trên schema PgSTAC nằm trong Postgres dùng chung.
+  # Tái sử dụng image backend; câu lệnh (command) dưới đây thực hiện cài đặt/cập nhật schema PgSTAC 
+  # (idempotent - không ảnh hưởng dữ liệu cũ khi chạy lại) trước khi chạy service.
+  # API chính sẽ proxy các request dạng `/api/stac/*` qua đây, và đường dẫn tile sẽ truy vấn trực tiếp vào PgSTAC này.
   stac:
     build:
       context: .
@@ -112,13 +110,14 @@ services:
       POSTGRES_HOST_READER: postgres
       POSTGRES_HOST_WRITER: postgres
       POSTGRES_PORT: 5432
-      # Used by scripts/ingest_sentinel.py (app PostgresConfig) to reach the DB
-      POSTGRES_HOST: postgres
+      # Dùng cho các script như `scripts/ingest_sentinel.py` (Cấu hình PostgresConfig của app) để kết nối tới DB
+      POSTGRES_HOST: postgres 
       STAC_FASTAPI_TITLE: Horus Maps STAC API
       STAC_FASTAPI_DESCRIPTION: Sentinel-2 catalogue (PgSTAC) for Horus Maps
-    # Dev: live host code so re-running the ingest script (docker compose exec)
-    # picks up edits with no rebuild. Editing the served app needs a
-    # `docker compose restart stac`. Safe here — STAC needs no baked model weights.
+    # Môi trường Dev: Mount trực tiếp code từ máy vật lý (host) để khi chạy lại script nạp dữ liệu (docker compose exec)
+    # nó sẽ nhận code mới sửa ngay mà không cần build lại image. 
+    # Nếu sửa phần logic chạy app (served app), bạn cần chạy lệnh `docker compose restart stac`.
+    # Cách này an toàn ở đây vì STAC không chứa các file trọng số mô hình nặng (model weights).
     volumes:
       - ./backend:/app
     ports:
@@ -139,9 +138,9 @@ services:
       REDIS_HOST: redis
       RABBITMQ_URL: amqp://admin:admin@rabbitmq:5672/
       TITILER_URL: http://titiler:80              # server-side proxy
-      TITILER_PUBLIC_URL: http://localhost:8081   # browser-facing (compare tiles)
-      STAC_API_URL: http://stac:8080              # /api/stac/* proxy target
-      DETECTION_OUTPUT_DIR: /app/static/detections # shared with worker (volume)
+      TITILER_PUBLIC_URL: http://localhost:8081   # Phía trình duyệt gọi trực tiếp (để so sánh tile)
+      STAC_API_URL: http://stac:8080              # Địa chỉ đích để proxy các request `/api/stac/*`
+      DETECTION_OUTPUT_DIR: /app/static/detections # Thư mục chia sẻ chung với worker thông qua volume
     ports:
       - "8000:8000"
     volumes:
