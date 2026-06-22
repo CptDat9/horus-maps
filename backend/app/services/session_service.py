@@ -9,7 +9,7 @@ from app.models.session import AppSession
 from app.models.utils import NotFound
 from app.schemas.session import SessionCreate
 
-
+# Stateful server luu session de dung AOI map theo (luu theo  session)
 class SessionService:
     async def create(
         self, db: AsyncSession, data: SessionCreate | None = None

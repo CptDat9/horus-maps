@@ -12,7 +12,7 @@ from app.utils.logger_utils import get_logger
 
 logger = get_logger("AOIService")
 
-
+# PostGIS SQL -> luu vao Cache cac thong so chu vi, dien tich.
 class AOIService:
     async def create(
         self, db: AsyncSession, session_id: uuid.UUID, aoi_data: AOICreate
