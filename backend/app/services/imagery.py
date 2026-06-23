@@ -6,6 +6,7 @@ the AOI's imagery (object detection AND the AOI image export). `MLService`
 inherits :class:`ImageryProvider`, so detection and export draw from exactly the
 same code path and the same base-layer tiles the user is viewing.
 """
+
 from __future__ import annotations
 
 import io
@@ -27,7 +28,7 @@ _TILE_PX = 256
 
 _TILE_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=10.0)
 _TILE_RETRIES = 3
-_FETCH_WORKERS = 8
+_FETCH_WORKERS = 8  # so threads
 _HTTP_HEADERS = {"User-Agent": "horus-maps/1.0 (+imagery)"}
 _MIN_ZOOM = 15
 
@@ -41,16 +42,21 @@ TILE_SOURCES: Dict[str, str] = {
 _DEFAULT_SOURCE = "google"
 
 _ALLOWED_TILE_HOSTS = {
-    "mt0.google.com", "mt1.google.com", "mt2.google.com", "mt3.google.com",
+    "mt0.google.com",
+    "mt1.google.com",
+    "mt2.google.com",
+    "mt3.google.com",
     "server.arcgisonline.com",
     "tile.openstreetmap.org",
-    "a.tile.openstreetmap.org", "b.tile.openstreetmap.org", "c.tile.openstreetmap.org",
+    "a.tile.openstreetmap.org",
+    "b.tile.openstreetmap.org",
+    "c.tile.openstreetmap.org",
 }
 
 
 def _deg2tile(lat: float, lon: float, z: int) -> Tuple[int, int]:
     """WGS84 → slippy-map tile index (x, y) at zoom z."""
-    n = 2 ** z
+    n = 2**z
     x = int((lon + 180.0) / 360.0 * n)
     y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
     return x, y
@@ -59,14 +65,20 @@ def _deg2tile(lat: float, lon: float, z: int) -> Tuple[int, int]:
 def _pixel_to_lonlat(px: float, py: float, z: int) -> Tuple[float, float]:
     """Global map-pixel (px, py) at zoom z → (lon, lat) — inverse Web-Mercator.
     Casts to native float (np.float64 is not JSON-serialisable)."""
-    n = 2 ** z
+    n = 2**z
     lon = px / (_TILE_PX * n) * 360.0 - 180.0
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * py / (_TILE_PX * n)))))
+    lat = math.degrees(
+        math.atan(math.sinh(math.pi * (1.0 - 2.0 * py / (_TILE_PX * n))))
+    )
     return float(lon), float(lat)
 
 
 def _valid_tile_template(url: str | None) -> bool:
-    if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+    if (
+        not url
+        or not isinstance(url, str)
+        or not url.startswith(("http://", "https://"))
+    ):
         return False
     if not all(p in url for p in ("{x}", "{y}", "{z}")):
         return False
@@ -156,17 +168,34 @@ class ImageryProvider:
                     return Image.open(io.BytesIO(resp.content)).convert("RGB")
                 except Exception as e:
                     if attempt == _TILE_RETRIES - 1:
-                        logger.warning("Tile z=%s x=%s y=%s failed (%s) — blank", z, xt, yt, e)
+                        logger.warning(
+                            "Tile z=%s x=%s y=%s failed (%s) — blank", z, xt, yt, e
+                        )
                         return None
             return None
 
         failed = 0
         with httpx.Client(
-            timeout=_TILE_TIMEOUT, headers=_HTTP_HEADERS, follow_redirects=True,
+            timeout=_TILE_TIMEOUT,
+            headers=_HTTP_HEADERS,
+            follow_redirects=True,
             limits=httpx.Limits(max_connections=_FETCH_WORKERS),
         ) as client:
-            with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
-                results = pool.map(lambda j: (j[0], j[1], _fetch_one(client, j[2], j[3])), jobs)
+            with ThreadPoolExecutor(
+                max_workers=_FETCH_WORKERS
+            ) as pool:  # tao threadpool voi semaphore = 8 chay song song
+                #  Bên trong j, các phần tử được đánh chỉ số từ 0 đến 3:
+
+                # j[0] chính là i (vị trí cột)
+
+                # j[1] chính là j (vị trí hàng)
+
+                # j[2] chính là xt (tọa độ X của tile)
+
+                # j[3] chính là yt (tọa độ Y của tile)
+                results = pool.map(
+                    lambda j: (j[0], j[1], _fetch_one(client, j[2], j[3])), jobs
+                )
                 for i, j, tile in results:
                     if tile is None:
                         failed += 1
@@ -194,11 +223,20 @@ class ImageryProvider:
         """
         url_tpl = resolve_template(tile_url, source)
         z = zoom or self._zoom_for_budget(bbox, 19, max_tiles)
-        mosaic, _x0, _y0, n_tiles, n_failed = self._fetch_mosaic(bbox, z, url_tpl, max_tiles)
+        mosaic, _x0, _y0, n_tiles, n_failed = self._fetch_mosaic(
+            bbox, z, url_tpl, max_tiles
+        )
         if max(mosaic.size) > max_side:
             ratio = max_side / max(mosaic.size)
-            mosaic = mosaic.resize((int(mosaic.width * ratio), int(mosaic.height * ratio)), Image.LANCZOS)
+            mosaic = mosaic.resize(
+                (int(mosaic.width * ratio), int(mosaic.height * ratio)), Image.LANCZOS
+            )
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         mosaic.save(output_path, "PNG", optimize=True)
-        return {"zoom": z, "source": _source_label(url_tpl), "size": list(mosaic.size),
-                "tiles_total": n_tiles, "tiles_failed": n_failed}
+        return {
+            "zoom": z,
+            "source": _source_label(url_tpl),
+            "size": list(mosaic.size),
+            "tiles_total": n_tiles,
+            "tiles_failed": n_failed,
+        }
