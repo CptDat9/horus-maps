@@ -102,13 +102,13 @@ class MLService(ImageryProvider):
 
     def __init__(self) -> None:
         self._model: Any = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock() #mutex
 
 
     def _load_model(self) -> Any:
         if self._model is not None:
             return self._model
-        with self._lock:
+        with self._lock: #lock de khong bi nap 2 lan cung luc
             if self._model is None:
                 from ultralytics import YOLO
 
