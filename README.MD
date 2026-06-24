@@ -48,11 +48,11 @@ Dự án đã được đóng góigói bằng Docker Compose, chỉ cần chạy
 ### 2. Các bước chạy
 Mở terminal tại thư mục gốc của dự án và chạy các lệnh sau:
 
-# Tạo file môi trường từ file mẫu
+#### Tạo file môi trường từ file mẫu
 ```bash
 cp .env.example .env
 ```
-# Khởi chạy toàn bộ hệ thống dưới nền và tự động build
+#### Khởi chạy toàn bộ hệ thống dưới nền và tự động build
 ```bash
 docker compose up -d --build
 ```
@@ -81,7 +81,7 @@ docker compose ps
 ```bash
 docker compose logs -f
 ```
-### Dừng hệ thống
+## Dừng hệ thống
 - Khi không sử dụng và muốn giải phóng hoàn toàn tài nguyên CPU cũng như bộ nhớ RAM cho máy tính, bạn chạy lệnh sau để hạ các container xuống một cách an toàn:
 ```bash
 docker compose down
