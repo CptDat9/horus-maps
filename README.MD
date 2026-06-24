@@ -8,7 +8,7 @@
   <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/CptDat9/horus-maps?labelColor=7AA2E3&color=97E7E1">
 </div>
 
-Horus Maps là hệ thống bản đồ (Full-stack GIS) giúp quản lý, hiển thị, phân tích ảnh vệ tinh Sentinel-2 và tự động phát hiện đối tượng thông qua trí tuệ nhân tạo (AI Detection). Hệ thống đọc trực tiếp dữ liệu ảnh vệ tinh tối ưu hóa đám mây (COG) từ Cloud (AWS S3) và xử lý cắt lát bản đồ siêu tốc mà không cần tải file gốc dung lượng lớn về máy.
+Horus Maps là hệ thống bản đồ (Full-stack GIS) giúp quản lý, hiển thị, phân tích ảnh vệ tinh Sentinel-2, Google Satellite, OSM và tự động phát hiện đối tượng thông qua trí tuệ nhân tạo (AI Detection). Hệ thống đọc trực tiếp dữ liệu ảnh vệ tinh tối ưu hóa đám mây (COG) từ Cloud (AWS S3) và xử lý cắt lát bản đồ siêu tốc.
 
 ---
 
