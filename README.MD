@@ -1,4 +1,12 @@
-# Horus Maps
+<div align="center">
+<h1>Horus Maps</h1>
+</div>
+
+<div align="center">
+  <img alt="Static Badge" src="https://img.shields.io/badge/Viettel_Digital_Talent-2026-red?labelColor=151515&color=EE4E4E">
+  <img alt="Static Badge" src="https://img.shields.io/badge/Track-System Programming-orange?labelColor=151515&color=F4CE14">
+  <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/CptDat9/horus-maps?labelColor=7AA2E3&color=97E7E1">
+</div>
 
 Horus Maps là hệ thống bản đồ (Full-stack GIS) giúp quản lý, hiển thị, phân tích ảnh vệ tinh Sentinel-2 và tự động phát hiện đối tượng thông qua trí tuệ nhân tạo (AI Detection). Hệ thống đọc trực tiếp dữ liệu ảnh vệ tinh tối ưu hóa đám mây (COG) từ Cloud (AWS S3) và xử lý cắt lát bản đồ siêu tốc mà không cần tải file gốc dung lượng lớn về máy.
 
@@ -22,7 +30,7 @@ Horus Maps là hệ thống bản đồ (Full-stack GIS) giúp quản lý, hiể
 * Thuật toán lọc trùng toàn cục: Áp dụng cơ chế Non-Maximum Suppression (NMS) tính toán IoU xoay trên toàn bộ ranh giới vùng AOI để khử trùng lặp đối tượng tại các vùng biên chồng lấn giữa các ô ảnh.
 
 ### 4. Kiến trúc bất đồng bộ và Tối ưu hiệu năng
-* Xử lý đa luồng và Bất đồng bộ: Cấu hình gunicorn/uvicorn phân phối bất đồng bộ kết hợp tinh chỉnh các cờ nhớ gầm của thư viện GDAL (GDAL_CACHEMAX, VSI_CACHE), giúp tối ưu hóa dung lượng RAM và gánh tải mượt mà cho luồng đọc dữ liệu từ S3 Cloud.
+* Xử lý đa luồng và Bất đồng bộ: Sử dụng mutex để lock việc nặng (AI Detection), 8 threads worker cho việc tải ảnh (sử dụng ThreadPool). Cấu hình gunicorn/uvicorn phân phối bất đồng bộ kết hợp tinh chỉnh các cờ nhớ gầm của thư viện GDAL (GDAL_CACHEMAX, VSI_CACHE), giúp tối ưu hóa dung lượng RAM và gánh tải mượt mà cho luồng đọc dữ liệu từ S3 Cloud.
 * Hàng đợi tác vụ phân tầng (Message Queue): Tích hợp RabbitMQ để tách biệt hoàn toàn tác vụ nặng ra khỏi tiến trình xử lý HTTP request chính. Phân định mức độ ưu tiên (Priority) giúp các tác vụ nhẹ (so sánh ảnh, đo đạc) không bị nghẽn bởi tác vụ AI Detection chạy dài.
 * Đồng bộ thời gian thực: Sử dụng cầu nối Redis Pub/Sub kết hợp SSE (Server-Sent Events) và WebSocket để cập nhật trạng thái, tiến độ xử lý của tác vụ AI từ Worker về giao diện người dùng theo thời gian thực.
 * Cơ chế bộ nhớ đệm (Caching): Sử dụng Redis để lưu trữ tầng dữ liệu Map tiles và metadata STAC với cơ chế thời gian sống (TTL) phân tầng, giảm thiểu tối đa I/O hệ thống.
