@@ -30,31 +30,39 @@ class TaskHandlers:
             TaskType.HEAVY_REQUEST.value: self._heavy_request,
         }
 
-    async def dispatch(self, task_id: uuid.UUID, task_type: str, payload: Dict[str, Any]) -> None:
+    async def dispatch(
+        self, task_id: uuid.UUID, task_type: str, payload: Dict[str, Any]
+    ) -> None:
         """Route task to its registered handler. Status is managed by task_manager."""
         handler = self._registry.get(task_type)
         async with get_db_context() as db:
             try:
                 if handler is None:
                     logger.warning("Unhandled task type: %s", task_type)
-                    result = {"message": f"Task type '{task_type}' has no specific handler"}
+                    result = {
+                        "message": f"Task type '{task_type}' has no specific handler"
+                    }
                 else:
                     result = await handler(db, payload)
 
-                await task_service.update_status(db, task_id, TaskStatus.COMPLETED.value, result=result)
+                await task_service.update_status(
+                    db, task_id, TaskStatus.COMPLETED.value, result=result
+                )
                 logger.info("Task %s (%s) completed", task_id, task_type)
 
             except Exception as e:
-                logger.error("Task %s (%s) failed: %s", task_id, task_type, e, exc_info=True)
-                await task_service.update_status(db, task_id, TaskStatus.FAILED.value, error_message=str(e))
-
+                logger.error(
+                    "Task %s (%s) failed: %s", task_id, task_type, e, exc_info=True
+                )
+                await task_service.update_status(
+                    db, task_id, TaskStatus.FAILED.value, error_message=str(e)
+                )
 
     async def _heavy_request(self, db, payload: Dict) -> Dict:
         """Placeholder task queued by the rate limiter when a session exceeds the
         soft threshold — acknowledged so the API surface stays protected."""
         logger.info("Heavy request task acknowledged: %s", payload.get("path"))
         return {"message": "Heavy request acknowledged", "path": payload.get("path")}
-
 
     async def _extract_aoi(self, db, payload: Dict) -> Dict:
         """
@@ -68,6 +76,7 @@ class TaskHandlers:
         aoi = await aoi_service.get(db, uuid.UUID(aoi_id_str))
 
         from sqlalchemy import text
+
         sql = text(
             "SELECT ST_XMin(geometry), ST_YMin(geometry), ST_XMax(geometry), ST_YMax(geometry) "
             "FROM aoi WHERE id = :aoi_id"
@@ -83,12 +92,16 @@ class TaskHandlers:
         for col in collections:
             items = await pgstac_service.search_items_by_bbox(db, col, bbox, limit=5)
             for item in items:
-                found_items.append({
-                    "id": item["id"],
-                    "collection": item.get("collection_id"),
-                    "datetime": item["datetime"].isoformat() if item.get("datetime") else None,
-                    "assets": list((item.get("data") or {}).get("assets", {}).keys()),
-                })
+                found_items.append(
+                    {
+                        "id": item["id"],
+                        "collection": item.get("collection_id"),
+                        "datetime": item.get("datetime"),
+                        "assets": list(
+                            (item.get("data") or {}).get("assets", {}).keys()
+                        ),
+                    }
+                )
 
         return {
             "aoi_id": aoi_id_str,
@@ -112,12 +125,15 @@ class TaskHandlers:
         right_item_id = payload.get("right_item_id")
 
         if not all([comparison_id_str, left_item_id, right_item_id]):
-            raise ValueError("payload missing comparison_id / left_item_id / right_item_id")
+            raise ValueError(
+                "payload missing comparison_id / left_item_id / right_item_id"
+            )
 
         from app.configs.config import Config
 
         comparison = await comparison_service.get(db, uuid.UUID(comparison_id_str))
         from sqlalchemy import text
+
         bbox_row = (
             await db.execute(
                 text(
@@ -168,21 +184,30 @@ class TaskHandlers:
             "bbox": bbox,
             "left": {
                 "item_id": left_item_id,
-                "datetime": left["datetime"].isoformat() if left and left.get("datetime") else None,
+                "datetime": left["datetime"].isoformat()
+                if left and left.get("datetime")
+                else None,
                 "tile_url": _tile_url(left),
                 "image_url": _image_url(left),
             },
             "right": {
                 "item_id": right_item_id,
-                "datetime": right["datetime"].isoformat() if right and right.get("datetime") else None,
+                "datetime": right["datetime"].isoformat()
+                if right and right.get("datetime")
+                else None,
                 "tile_url": _tile_url(right),
                 "image_url": _image_url(right),
             },
         }
 
         await self._save_comparison_snapshots(
-            comparison_id_str, payload.get("session_id"), comparison.aoi_id,
-            bbox, enhance, {"left": _cog_href(left), "right": _cog_href(right)}, result,
+            comparison_id_str,
+            payload.get("session_id"),
+            comparison.aoi_id,
+            bbox,
+            enhance,
+            {"left": _cog_href(left), "right": _cog_href(right)},
+            result,
         )
 
         await comparison_service.update_status(
@@ -192,7 +217,9 @@ class TaskHandlers:
         return result
 
     @staticmethod
-    async def _save_comparison_snapshots(comparison_id, session_id, aoi_id, bbox, enhance, hrefs, result):
+    async def _save_comparison_snapshots(
+        comparison_id, session_id, aoi_id, bbox, enhance, hrefs, result
+    ):
         """Render each side's AOI crop to a PNG on the shared static volume so the
         comparison history is self-contained (survives the source COG, loads fast).
         Best-effort: a failed snapshot leaves the on-demand image_url as fallback."""
@@ -206,7 +233,9 @@ class TaskHandlers:
         out_dir = os.path.join(Config.DETECTION_OUTPUT_DIR, "comparisons")
         os.makedirs(out_dir, exist_ok=True)
         minx, miny, maxx, maxy = bbox
-        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(90.0, connect=5.0)
+        ) as client:
             for side, href in hrefs.items():
                 if not href:
                     continue
@@ -218,14 +247,18 @@ class TaskHandlers:
                 try:
                     resp = await client.get(url)
                     if resp.status_code == 200 and resp.content:
-                        with open(os.path.join(out_dir, f"{comparison_id}_{side}.png"), "wb") as fh:
+                        with open(
+                            os.path.join(out_dir, f"{comparison_id}_{side}.png"), "wb"
+                        ) as fh:
                             fh.write(resp.content)
                         result[side]["snapshot_url"] = (
                             f"/api/sessions/{session_id}/aois/{aoi_id}"
                             f"/comparisons/{comparison_id}/image/{side}"
                         )
                 except Exception as e:
-                    logger.warning("Comparison snapshot %s/%s failed: %s", comparison_id, side, e)
+                    logger.warning(
+                        "Comparison snapshot %s/%s failed: %s", comparison_id, side, e
+                    )
 
     async def _run_detection(self, db, payload: Dict) -> Dict:
         """
@@ -257,6 +290,7 @@ class TaskHandlers:
         aoi = await aoi_service.get(db, aoi_id)
 
         from sqlalchemy import text
+
         sql = text(
             "SELECT ST_XMin(geometry), ST_YMin(geometry), ST_XMax(geometry), ST_YMax(geometry) "
             "FROM aoi WHERE id = :aoi_id"
@@ -298,8 +332,13 @@ class TaskHandlers:
         meta = dict(geojson.get("metadata", {}))
         meta["has_preview"] = os.path.exists(preview_path)
         run = await detection_service.create_run(
-            db, session_id, aoi_id, rows,
-            classes=meta.get("classes"), meta=meta, run_id=run_id,
+            db,
+            session_id,
+            aoi_id,
+            rows,
+            classes=meta.get("classes"),
+            meta=meta,
+            run_id=run_id,
         )
 
         return {
@@ -330,7 +369,9 @@ class TaskHandlers:
         )
         return {
             "count": len(items),
-            "items": [{"id": i["id"], "collection": i.get("collection_id")} for i in items],
+            "items": [
+                {"id": i["id"], "collection": i.get("collection_id")} for i in items
+            ],
         }
 
     async def _get_collections(self, db, payload: Dict) -> Dict:
