@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '../components/layout/AppLayout';
 import { HorusMap } from '../components/map/HorusMap';
 import { MapControls } from '../components/map/MapControls';
+import { MapZoomInfo } from '../components/map/MapZoomInfo';
 import { ComparisonViewer } from '../components/ui/ComparisonViewer';
 import { SearchBar } from '../components/ui/SearchBar';
 import { Toolbar } from '../components/ui/Toolbar';
@@ -165,7 +166,11 @@ export function MapPage() {
           detectionsVisible={detectionsVisible}
         />
         <MapControls mapRef={mapRef} onResetView={handleReset} />
-
+        <MapZoomInfo
+          mapRef={mapRef}
+          activeLayerId={activeBase?.id}
+          activeLayerName={activeBase?.name}
+        />
         {sessionId && (
           <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[450] text-[10px] text-slate-400 font-mono pointer-events-none">
             session {sessionId.slice(0, 8)}

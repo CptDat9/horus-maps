@@ -1,0 +1,9 @@
+Endpoint,Status,Time(ms),Note
+GET /health,200,272.65,Health check
+GET /api/layers,200,38.12,Danh sách layers
+GET /api/stac/collections,200,2914.93,1 collections
+POST /api/stac/search (Hà Nội),200,5517.11,20 items
+POST /api/sessions,201,264.17,bgzuOpkz
+POST /aois,422,56.41,Validation error
+GET Tile (Cache MISS),200,25.85,Lần đầu - Cache miss
+GET Tile (Cache HIT avg),200,7.72,Các lần sau - Redis cache

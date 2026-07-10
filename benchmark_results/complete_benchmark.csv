@@ -1,0 +1,34 @@
+Endpoint,Status,Time(ms),Note
+GET /health,200,678.95,Kiểm tra trạng thái hệ thống
+GET /api/layers (Cache MISS/Lần đầu),200,206.55,Lấy danh sách layer từ DB
+GET /api/layers (Cache HIT/Redis),200,62.43,Lấy danh sách layer từ Redis Cache
+GET [8080] /collections,200,2065.44,STAC FastAPI Direct - Lấy bộ sưu tập (sentinel-2-l2a)
+GET /api/stac/collections,200,656.13,Proxy STAC - Lấy danh sách collections
+GET /api/stac/collections/{id},200,283.86,Proxy STAC - Chi tiết collection
+GET /api/stac/collections/{id}/items,200,5057.94,Proxy STAC - Danh sách items
+POST /api/stac/search,200,1287.89,Proxy STAC - Tìm kiếm không gian thời gian (Hà Nội)
+GET /api/stac/items/{id}/tile-url,200,463.83,Tạo template Tile URL từ COG
+GET /api/maps/collections,200,112.22,Bản đồ - Lấy danh sách collections qua pgstac_service
+POST /api/maps/search,500,1776.69,Bản đồ - Tìm kiếm FeatureCollection trực tiếp
+GET /api/tiles/... (Cache MISS),500,39.17,Tải tile gốc từ upstream / TiTiler
+GET /api/tiles/... (Cache HIT Avg),404,58.8,Đọc trực tiếp cấu trúc nhị phân từ Redis Cache
+POST /api/sessions,201,379.86,Khởi tạo Session: b83e9f04-f9ed-46a5-886b-a52065034991
+GET /api/sessions/{id},200,176.7,Lấy thông tin chi tiết cấu hình Session
+POST /api/sessions/{id}/aois,201,1491.71,Tạo AOI mới & Kích hoạt Background Task TaskType.EXTRACT_AOI: 49671bb2-3ee2-4ea2-ac55-62b8bd9998d0
+GET /api/sessions/{id}/aois,200,84.7,Lấy danh sách AOI trong Session (Batch query ST_AsGeoJSON)
+GET /api/sessions/{id}/aois/{aoi_id},200,60.15,Chi tiết thông tin hình học một AOI
+PUT /api/sessions/{id}/aois/{aoi_id},200,90.74,Cập nhật metadata AOI
+GET /api/sessions/{id}/aois/{aoi_id}/image,500,9909.44,Yêu cầu export ảnh vệ tinh dạng PNG cho AOI
+POST /api/sessions/{id}/aois/{id}/detections,422,39.4,Đẩy Task xử lý AI vào Queue. Task ID: None
+GET /api/sessions/{id}/aois/{id}/detections,200,20.51,Lấy danh sách đối tượng nhận diện của bản chạy mới nhất. Run ID: None
+GET /api/sessions/{id}/aois/{id}/detections/runs,200,28.52,Lấy lịch sử tất cả các lượt chạy AI trên AOI
+GET /api/sessions/{id}/aois/{id}/preview,404,5.04,Lấy ảnh vẽ bounding box mới nhất hệ thống sinh ra
+POST /api/sessions/{id}/aois/{id}/comparisons,202,188.53,Kích hoạt phân tích biến động thời gian (Task). ID: 851aa213-004f-4d6d-9136-a50bf4586ee7
+GET /api/sessions/{id}/aois/{id}/comparisons,200,26.61,Lấy danh sách các cặp so sánh biến động
+GET /api/sessions/{id}/aois/{id}/comparisons/{id},200,19.08,Chi tiết trạng thái xử lý cặp so sánh
+GET /api/sessions/{id}/aois/{id}/comparisons/{id}/image/left,404,24.75,Lấy ảnh Crop snapshot vế TRÁI (Left side)
+POST /api/sessions/{id}/aois/{id}/measurements,201,117.04,Lưu vết đo đạc hình học diện tích/khoảng cách
+GET /api/sessions/{id}/aois/{id}/measurements,200,24.66,Lấy danh sách các dữ liệu đo đạc trên AOI
+GET /api/sessions/{id}/tasks,200,24.18,Lấy lịch sử toàn bộ hàng đợi Task của Session
+DELETE /api/sessions/{id}/aois/{id}/detections,204,43.99,Xóa toàn bộ lịch sử detection của AOI
+DELETE /api/sessions/{id}/aois/{aoi_id},204,44.6,Xóa thông tin AOI khỏi cơ sở dữ liệu
